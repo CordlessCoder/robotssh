@@ -62,7 +62,7 @@ struct Cli {
 
 fn main() -> Result<ExitCode> {
     color_eyre::install().unwrap();
-    let args = dbg!(Cli::parse());
+    let args = Cli::parse();
 
     let parent_start_time = Instant::now();
 
