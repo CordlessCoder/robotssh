@@ -23,6 +23,7 @@ use std::{
 
 const PORT_FORWARD_HOST: &str = "127.0.0.1";
 
+/// A modern rewrite of autossh
 #[derive(Debug, Parser)]
 #[command(version, about)]
 struct Cli {
