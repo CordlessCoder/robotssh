@@ -259,6 +259,14 @@ struct ConnectionTesterOptions {
     net_timeout: Duration,
 }
 
+enum TestResult {
+    Success,
+    AcceptFail,
+    WriteFail,
+    ReadFail,
+    Timeout,
+}
+
 impl ConnectionTester {
     fn spawn(
         opts: ConnectionTesterOptions,
@@ -284,15 +292,20 @@ impl ConnectionTester {
 
             let mut tries = 0;
             loop {
-                if !Self::run_test(
+                use TestResult::*;
+                match Self::run_test(
                     listener.as_deref_mut(),
                     target.clone(),
                     opts.net_timeout,
                     &payload,
                 ) {
-                    tries += 1;
-                } else {
-                    tries = 0;
+                    Success => {
+                        tries = 0;
+                    }
+                    AcceptFail | ReadFail | WriteFail => break,
+                    Timeout => {
+                        tries += 1;
+                    }
                 };
                 if tries > opts.max_conn_tries {
                     break;
@@ -311,7 +324,7 @@ impl ConnectionTester {
         target: impl ToSocketAddrs + Send,
         timeout: Duration,
         payload: &[u8],
-    ) -> bool {
+    ) -> TestResult {
         const WRITER: Token = Token(0);
         const CONN: Token = Token(1);
         const READER: Token = Token(2);
@@ -319,7 +332,7 @@ impl ConnectionTester {
         let mut to_be_recieved = payload;
         let target = target.to_socket_addrs().unwrap().next().unwrap();
         let Ok(mut writer) = TcpStream::connect(target) else {
-            return false;
+            return TestResult::AcceptFail;
         };
         let mut reader = None;
         let mut events = Events::with_capacity(128);
@@ -337,7 +350,7 @@ impl ConnectionTester {
 
                 if events.is_empty() {
                     // timed out
-                    return false;
+                    return TestResult::Timeout;
                 }
                 // Process each event.
                 for event in events.iter() {
@@ -346,7 +359,7 @@ impl ConnectionTester {
                     match event.token() {
                         CONN if event.is_readable() => {
                             let Ok((mut connection, _)) = listener.accept() else {
-                                return false;
+                                return TestResult::AcceptFail;
                             };
                             poll.registry().deregister(listener).unwrap();
                             poll.registry()
@@ -355,10 +368,19 @@ impl ConnectionTester {
                             reader = Some(connection)
                         }
                         WRITER if event.is_writable() => {
-                            let Ok(written) = writer.write(to_be_sent) else {
-                                return false;
+                            let wrote = match writer.write(to_be_sent) {
+                                Err(err)
+                                    if matches!(
+                                        err.kind(),
+                                        ErrorKind::Interrupted | ErrorKind::WouldBlock
+                                    ) =>
+                                {
+                                    continue;
+                                }
+                                Ok(0) | Err(_) => return TestResult::WriteFail,
+                                Ok(wrote) => wrote,
                             };
-                            to_be_sent = &to_be_sent[written..];
+                            to_be_sent = &to_be_sent[wrote..];
                             if to_be_sent.is_empty() {
                                 poll.registry().deregister(&mut writer).unwrap();
                             }
@@ -375,21 +397,21 @@ impl ConnectionTester {
                                 {
                                     continue;
                                 }
-                                Ok(0) | Err(_) => return false,
+                                Ok(0) | Err(_) => return TestResult::ReadFail,
                                 Ok(read) => read,
                             };
                             let Some((expected, left)) = to_be_recieved.split_at_checked(read)
                             else {
-                                return false;
+                                return TestResult::ReadFail;
                             };
                             let read = &buf[..read];
                             if expected != read {
-                                return false;
+                                return TestResult::ReadFail;
                             }
                             to_be_recieved = left;
                             if to_be_recieved.is_empty() {
                                 poll.registry().deregister(reader).unwrap();
-                                return true;
+                                return TestResult::Success;
                             }
                         }
                         // We don't expect any events with tokens other than those we provided.
@@ -408,7 +430,7 @@ impl ConnectionTester {
 
                 if events.is_empty() {
                     // timed out
-                    return false;
+                    return TestResult::Timeout;
                 }
 
                 // Process each event.
@@ -423,7 +445,7 @@ impl ConnectionTester {
                             {
                                 continue;
                             }
-                            Ok(0) | Err(_) => return false,
+                            Ok(0) | Err(_) => return TestResult::WriteFail,
                             Ok(wrote) => wrote,
                         };
                         to_be_sent = &to_be_sent[wrote..];
@@ -439,20 +461,20 @@ impl ConnectionTester {
                             {
                                 continue;
                             }
-                            Ok(0) | Err(_) => return false,
+                            Ok(0) | Err(_) => return TestResult::ReadFail,
                             Ok(read) => read,
                         };
                         let Some((expected, left)) = to_be_recieved.split_at_checked(read) else {
-                            return false;
+                            return TestResult::ReadFail;
                         };
                         let read = &buf[..read];
                         if expected != read {
-                            return false;
+                            return TestResult::ReadFail;
                         }
                         to_be_recieved = left;
                         if to_be_recieved.is_empty() {
                             poll.registry().deregister(&mut writer).unwrap();
-                            return true;
+                            return TestResult::Success;
                         }
                     }
                 }
