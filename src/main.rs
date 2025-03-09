@@ -49,7 +49,7 @@ struct Cli {
     max_start: Option<usize>,
 
     /// how many times to retry the connection without backing off
-    #[arg(env, long, default_value_t = 5)]
+    #[arg(env, long, default_value_t = 3)]
     backoff_fast_tries: u32,
 
     /// how long can the process/daemon live
@@ -62,7 +62,12 @@ struct Cli {
 
 fn main() -> Result<ExitCode> {
     color_eyre::install().unwrap();
-    let args = Cli::parse();
+    let mut args = Cli::parse();
+
+    args.tester_options.net_timeout = args
+        .tester_options
+        .net_timeout
+        .min(args.tester_options.poll_time / 2);
 
     let parent_start_time = Instant::now();
 
@@ -259,12 +264,14 @@ struct ConnectionTesterOptions {
     net_timeout: Duration,
 }
 
+#[derive(Debug)]
 enum TestResult {
     Success,
     AcceptFail,
     WriteFail,
     ReadFail,
-    Timeout,
+    PollFail,
+    Timeout(usize),
 }
 
 impl ConnectionTester {
@@ -292,6 +299,7 @@ impl ConnectionTester {
 
             let mut tries = 0;
             loop {
+                let start = Instant::now();
                 use TestResult::*;
                 match Self::run_test(
                     listener.as_deref_mut(),
@@ -299,18 +307,19 @@ impl ConnectionTester {
                     opts.net_timeout,
                     &payload,
                 ) {
-                    Success => {
-                        tries = 0;
-                    }
-                    AcceptFail | ReadFail | WriteFail => break,
-                    Timeout => {
+                    PollFail | AcceptFail | ReadFail | WriteFail | Timeout(0) => break,
+                    Timeout(_) => {
                         tries += 1;
                     }
+                    Success => {}
                 };
-                if tries > opts.max_conn_tries {
+                if tries >= opts.max_conn_tries {
                     break;
                 }
-                if stop_rx.recv_timeout(opts.poll_time).is_ok() {
+                if stop_rx
+                    .recv_timeout(opts.poll_time.saturating_sub(start.elapsed()))
+                    .is_ok()
+                {
                     return false;
                 };
             }
@@ -337,20 +346,35 @@ impl ConnectionTester {
         let mut reader = None;
         let mut events = Events::with_capacity(128);
         let mut poll = Poll::new().unwrap();
+        let mut start = Instant::now();
         if let Some(listener) = listener {
-            poll.registry()
-                .register(&mut writer, WRITER, Interest::WRITABLE)
-                .unwrap();
-            poll.registry()
-                .register(listener, CONN, Interest::READABLE)
-                .unwrap();
+            _ = poll
+                .registry()
+                .register(&mut writer, WRITER, Interest::WRITABLE);
+            _ = poll.registry().register(listener, CONN, Interest::READABLE);
             loop {
-                // Poll Mio for events, blocking until we get an event.
-                _ = poll.poll(&mut events, Some(timeout));
+                if poll
+                    .poll(
+                        &mut events,
+                        Some(
+                            timeout
+                                .saturating_sub(start.elapsed())
+                                .min(Duration::from_millis(20)),
+                        ),
+                    )
+                    .is_err()
+                {
+                    return TestResult::PollFail;
+                };
 
-                if events.is_empty() {
+                if !events.is_empty() {
+                    start = Instant::now();
+                }
+                if events.is_empty() && start.elapsed() >= timeout {
                     // timed out
-                    return TestResult::Timeout;
+                    return TestResult::Timeout(
+                        payload.len() * 2 - to_be_recieved.len() - to_be_sent.len(),
+                    );
                 }
                 // Process each event.
                 for event in events.iter() {
@@ -362,9 +386,11 @@ impl ConnectionTester {
                                 return TestResult::AcceptFail;
                             };
                             poll.registry().deregister(listener).unwrap();
-                            poll.registry()
-                                .register(&mut connection, READER, Interest::READABLE)
-                                .unwrap();
+                            _ = poll.registry().register(
+                                &mut connection,
+                                READER,
+                                Interest::READABLE,
+                            );
                             reader = Some(connection)
                         }
                         WRITER if event.is_writable() => {
@@ -420,17 +446,34 @@ impl ConnectionTester {
                 }
             }
         } else {
-            poll.registry()
-                .register(&mut writer, WRITER, Interest::WRITABLE | Interest::READABLE)
-                .unwrap();
+            _ = poll.registry().register(
+                &mut writer,
+                WRITER,
+                Interest::WRITABLE | Interest::READABLE,
+            );
             loop {
-                let start = Instant::now();
-                // Poll Mio for events, blocking until we get an event.
-                _ = poll.poll(&mut events, Some(timeout.saturating_sub(start.elapsed())));
+                if poll
+                    .poll(
+                        &mut events,
+                        Some(
+                            timeout
+                                .saturating_sub(start.elapsed())
+                                .min(Duration::from_millis(20)),
+                        ),
+                    )
+                    .is_err()
+                {
+                    return TestResult::PollFail;
+                };
+                if !events.is_empty() {
+                    start = Instant::now();
+                }
 
-                if events.is_empty() {
+                if events.is_empty() && start.elapsed() >= timeout {
                     // timed out
-                    return TestResult::Timeout;
+                    return TestResult::Timeout(
+                        payload.len() * 2 - to_be_recieved.len() - to_be_sent.len(),
+                    );
                 }
 
                 // Process each event.
