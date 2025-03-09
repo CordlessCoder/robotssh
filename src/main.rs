@@ -103,6 +103,10 @@ fn main() -> Result<ExitCode> {
     let mut start_count = 0;
     let mut tries = 0;
     loop {
+        if args.max_start.is_some_and(|max| start_count > max) {
+            // We ran out of restarts
+            break;
+        }
         let backoff = backoff(
             tries,
             args.backoff_fast_tries,
@@ -113,7 +117,7 @@ fn main() -> Result<ExitCode> {
         let ssh_start = Instant::now();
         let ssh = SharedChild::spawn(&mut ssh).unwrap();
 
-        let (kill_tx, kill_rx) = mpsc::sync_channel(1);
+        let (kill_tx, kill_rx) = mpsc::sync_channel(2);
         let until_kill = args
             .max_lifetime
             .map(|max_lifetime| max_lifetime.saturating_sub(parent_start_time.elapsed()));
@@ -125,38 +129,38 @@ fn main() -> Result<ExitCode> {
                 socket.clone(),
                 (PORT_FORWARD_HOST, mon_port.get()),
                 move || {
-                    _ = kill_tx.try_send(());
+                    _ = kill_tx.send(());
                 },
             )
         });
 
-        let status = match run_ssh(ssh, until_kill, (kill_tx, kill_rx)) {
-            // max_lifetime elapsed, exit
-            SshExit::Killed => break,
-            SshExit::Status(status) => status,
-        };
+        let exit = run_ssh(ssh, until_kill, (kill_tx, kill_rx));
+        start_count += 1;
         let mut connection_failed = false;
         if let Some(tester) = connection_tester {
             connection_failed = tester.join();
         }
-
         if ssh_start.elapsed() >= min_uptime_to_reset_backoff {
             tries = 0
         } else {
             tries += 1;
         };
-        if status.success() {
-            // ssh existed with code 0
-            break;
-        }
-        start_count += 1;
-        if args.max_start.is_some_and(|max| start_count > max) {
-            // We ran out of restarts
-            break;
-        }
-        if connection_failed {
-            continue;
-        }
+
+        let status = match exit {
+            // max_lifetime elapsed
+            SshExit::Killed if !connection_failed => break,
+            SshExit::Killed => {
+                // killed due to bad connection
+                eprintln!("SSH connection dropped. Restarting");
+                continue;
+            }
+            SshExit::Status(status) if status.success() => {
+                // ssh existed with code 0
+                break;
+            }
+            SshExit::Status(status) => status,
+        };
+
         #[cfg(unix)]
         'signal: {
             use std::os::unix::process::ExitStatusExt;
@@ -479,24 +483,24 @@ fn run_ssh(
         let ssh = &ssh;
         let start = &start;
         let exited = &exited;
-        let killer = max_lifetime.map(|max_lifetime| {
-            s.spawn(move || {
-                let until_kill = max_lifetime.saturating_sub(start.elapsed());
+        let killer = s.spawn(move || {
+            if let Some(max) = max_lifetime {
+                let until_kill = max.saturating_sub(start.elapsed());
                 _ = kill_channel.1.recv_timeout(until_kill);
-                if exited.load(Ordering::Acquire) {
-                    return false;
-                }
-                ssh.kill().unwrap();
-                true
-            })
+            } else {
+                _ = kill_channel.1.recv();
+            };
+            if exited.load(Ordering::Acquire) {
+                return false;
+            }
+            ssh.kill().unwrap();
+            true
         });
         let status = ssh.wait().unwrap();
         exited.store(true, Ordering::Release);
-        if let Some(killer) = killer {
-            _ = kill_channel.0.send(());
-            if killer.join().unwrap() {
-                return SshExit::Killed;
-            }
+        _ = kill_channel.0.try_send(());
+        if killer.join().unwrap() {
+            return SshExit::Killed;
         }
         SshExit::Status(status)
     })
