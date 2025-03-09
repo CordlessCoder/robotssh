@@ -1,4 +1,4 @@
-use clap::{Args, Parser};
+use clap::{Args, CommandFactory, Parser};
 use color_eyre::{Result, eyre::bail};
 use mio::{
     Events, Interest, Poll, Token,
@@ -63,6 +63,10 @@ struct Cli {
 fn main() -> Result<ExitCode> {
     color_eyre::install().unwrap();
     let mut args = Cli::parse();
+    if args.ssh_args.is_empty() {
+        clap::Command::print_long_help(&mut Cli::command()).unwrap();
+        return Ok(ExitCode::FAILURE);
+    }
 
     args.tester_options.net_timeout = args
         .tester_options

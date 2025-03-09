@@ -2,7 +2,6 @@
 name = "robotssh"
 authors = ["CordlessCoder <roman@vm.net.ua>"]
 license = "MIT"
-license-file = "LICENSE"
 description = "A modern rewrite of autossh"
 version = "0.1.0"
 edition = "2024"
