@@ -50,7 +50,7 @@ struct Cli {
     max_start: Option<usize>,
 
     /// how many times to retry the connection without backing off
-    #[arg(env, long, default_value_t = 3)]
+    #[arg(env, long, default_value_t = 2)]
     backoff_fast_tries: u32,
 
     /// What should be the absolute maximum time between connection attempts
