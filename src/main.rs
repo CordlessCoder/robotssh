@@ -53,6 +53,10 @@ struct Cli {
     #[arg(env, long, default_value_t = 3)]
     backoff_fast_tries: u32,
 
+    /// What should be the absolute maximum time between connection attempts
+    #[arg(env, long, value_parser = humantime::parse_duration, default_value = "1h")]
+    backoff_upper_bound: Duration,
+
     /// how long can the process/daemon live
     #[arg(env, long, value_parser = humantime::parse_duration)]
     max_lifetime: Option<Duration>,
@@ -121,7 +125,8 @@ fn main() -> Result<ExitCode> {
             tries,
             args.backoff_fast_tries,
             args.tester_options.poll_time,
-        );
+        )
+        .min(args.backoff_upper_bound);
         std::thread::sleep(backoff);
 
         let ssh_start = Instant::now();
