@@ -5,7 +5,7 @@ use mio::net::TcpListener;
 use shared_child::SharedChild;
 use std::{
     net::SocketAddrV4,
-    process::{Command, ExitCode, ExitStatus},
+    process::{Command, ExitStatus},
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
@@ -20,12 +20,22 @@ mod conntester;
 
 const PORT_FORWARD_HOST: &str = "127.0.0.1";
 
-fn main() -> Result<ExitCode> {
+fn main() -> Result<()> {
     color_eyre::install().unwrap();
+
     let mut args = cli::Cli::parse();
+    if let Some(shell) = args.completions {
+        clap_complete::generate(
+            shell,
+            &mut cli::Cli::command(),
+            "robotssh",
+            &mut std::io::stdout(),
+        );
+        return Ok(());
+    }
     if args.ssh_args.is_empty() {
         clap::Command::print_long_help(&mut cli::Cli::command()).unwrap();
-        return Ok(ExitCode::FAILURE);
+        return Ok(());
     }
 
     args.tester_options.net_timeout = args
@@ -42,9 +52,12 @@ fn main() -> Result<ExitCode> {
         ssh.arg("-L");
         ssh.arg(format!(
             "{monitor_port}:{PORT_FORWARD_HOST}:{echo_port}",
-            echo_port = args.echo_port.map(|p| p.get()).unwrap_or(monitor_port)
+            echo_port = args
+                .echo_server_port
+                .map(|p| p.get())
+                .unwrap_or(monitor_port)
         ));
-        if args.echo_port.is_none() {
+        if args.echo_server_port.is_none() {
             let Some(echo_port) = monitor_port.checked_add(1) else {
                 bail!("Calculating the default reply port(--monitor_port + 1) overflowed")
             };
@@ -190,7 +203,7 @@ fn main() -> Result<ExitCode> {
         }
     }
 
-    Ok(ExitCode::SUCCESS)
+    Ok(())
 }
 
 fn backoff(tries: u32, fast_tries: u32, poll_time: Duration) -> Duration {
