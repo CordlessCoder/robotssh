@@ -112,7 +112,7 @@ fn main() -> Result<()> {
                 socket.clone(),
                 (PORT_FORWARD_HOST, mon_port.get()),
                 move || {
-                    _ = kill_tx.send(());
+                    _ = kill_tx.try_send(());
                 },
             )
         });
