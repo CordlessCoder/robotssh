@@ -19,14 +19,14 @@ clap = { version = "4.5.31", default-features = false, features = [
   "cargo",
   "usage",
 ] }
-clap_complete = "4.5.46"
-color-eyre = { version = "0.6.3", default-features = false }
-humantime = "2.1.0"
+clap_complete = "4.5.50"
+color-eyre = { version = "0.6.4", default-features = false }
+humantime = "2.2.0"
 mio = { version = "1.0.3", features = [
   "net",
   "os-poll",
 ], default-features = false }
-rand = { version = "0.9.0", default-features = false, features = [
+rand = { version = "0.9.1", default-features = false, features = [
   "thread_rng",
 ] }
-shared_child = "1.0.1"
+shared_child = "1.0.2"
