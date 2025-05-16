@@ -5,6 +5,7 @@ use mio::net::TcpListener;
 use shared_child::SharedChild;
 use std::{
     net::SocketAddrV4,
+    num::NonZeroU16,
     process::{Command, ExitStatus},
     sync::{
         Arc, Mutex,
@@ -48,7 +49,7 @@ fn main() -> Result<()> {
     // Build SSH command
     let mut ssh = Command::new(args.ssh_path);
     let mut listen_port = None;
-    if let Some(monitor_port) = args.monitor_port.map(|p| p.get()) {
+    if let Some(monitor_port) = args.monitor_port.map(NonZeroU16::get) {
         ssh.arg("-L");
         ssh.arg(format!(
             "{monitor_port}:{PORT_FORWARD_HOST}:{echo_port}",
@@ -202,7 +203,6 @@ fn main() -> Result<()> {
             },
         }
     }
-
     Ok(())
 }
 

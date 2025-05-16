@@ -52,8 +52,7 @@ impl ConnectionTester {
                 return false;
             };
 
-            let mut tries = 0;
-            loop {
+            for _ in 0..opts.max_conn_tries {
                 let start = Instant::now();
                 use TestResult::*;
                 match Self::run_test(
@@ -63,14 +62,9 @@ impl ConnectionTester {
                     &payload,
                 ) {
                     PollFail | AcceptFail | ReadFail | WriteFail | Timeout(0) => break,
-                    Timeout(_) => {
-                        tries += 1;
-                    }
+                    Timeout(_) => {}
                     Success => {}
                 };
-                if tries >= opts.max_conn_tries {
-                    break;
-                }
                 if stop_rx
                     .recv_timeout(opts.poll_time.saturating_sub(start.elapsed()))
                     .is_ok()
