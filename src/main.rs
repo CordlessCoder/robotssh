@@ -53,10 +53,7 @@ fn main() -> Result<()> {
         ssh.arg("-L");
         ssh.arg(format!(
             "{monitor_port}:{PORT_FORWARD_HOST}:{echo_port}",
-            echo_port = args
-                .echo_server_port
-                .map(|p| p.get())
-                .unwrap_or(monitor_port)
+            echo_port = args.echo_server_port.map_or(monitor_port, NonZeroU16::get)
         ));
         if args.echo_server_port.is_none() {
             let Some(echo_port) = monitor_port.checked_add(1) else {
@@ -118,17 +115,17 @@ fn main() -> Result<()> {
             )
         });
 
-        let exit = run_ssh(ssh, until_kill, (kill_tx, kill_rx));
+        let exit = run_ssh(&ssh, until_kill, (kill_tx, kill_rx));
         start_count += 1;
         let mut connection_failed = false;
         if let Some(tester) = connection_tester {
             connection_failed = tester.join();
         }
         if ssh_start.elapsed() >= min_uptime_to_reset_backoff {
-            tries = 0
+            tries = 0;
         } else {
             tries += 1;
-        };
+        }
 
         let status = match exit {
             // max_lifetime elapsed
@@ -164,7 +161,7 @@ fn main() -> Result<()> {
                     std::process::exit(signal);
                 }
                 _ => {
-                    eprintln!("SSH exited due to signal {signal}. Restarting.")
+                    eprintln!("SSH exited due to signal {signal}. Restarting.");
                 }
             }
         }
@@ -194,7 +191,7 @@ fn main() -> Result<()> {
             // user fix. But if been running ok already, then network may be down and then 
             // ssh fails exit(1) on the attempt to reconnect....so we try to restart.
             | 1 if start_count > 1 || args.gate_time.is_zero() => {
-                eprintln!("SSH exited with errror status {code}, restarting")
+                eprintln!("SSH exited with errror status {code}, restarting");
             }
             // Remote command error status
             code => {
@@ -222,7 +219,7 @@ enum SshExit {
 }
 
 fn run_ssh(
-    ssh: SharedChild,
+    ssh: &SharedChild,
     max_lifetime: Option<Duration>,
     kill_channel: (SyncSender<()>, Receiver<()>),
 ) -> SshExit {
@@ -238,7 +235,7 @@ fn run_ssh(
                 _ = kill_channel.1.recv_timeout(until_kill);
             } else {
                 _ = kill_channel.1.recv();
-            };
+            }
             if exited.load(Ordering::Acquire) {
                 return false;
             }

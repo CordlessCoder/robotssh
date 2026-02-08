@@ -50,36 +50,30 @@ impl ConnectionTester {
 
             if stop_rx.recv_timeout(opts.first_poll_time).is_ok() {
                 return false;
-            };
+            }
 
             for _ in 0..opts.max_conn_tries {
-                let start = Instant::now();
                 use TestResult::*;
-                match Self::run_test(
-                    listener.as_deref_mut(),
-                    target.clone(),
-                    opts.net_timeout,
-                    &payload,
-                ) {
+                let start = Instant::now();
+                match Self::run_test(listener.as_deref_mut(), &target, opts.net_timeout, &payload) {
                     PollFail | AcceptFail | ReadFail | WriteFail | Timeout(0) => break,
-                    Timeout(_) => {}
-                    Success => {}
-                };
+                    Timeout(_) | Success => {}
+                }
                 if stop_rx
                     .recv_timeout(opts.poll_time.saturating_sub(start.elapsed()))
                     .is_ok()
                 {
                     return false;
-                };
+                }
             }
             on_death();
             true
         });
-        ConnectionTester { handle, stop_tx }
+        ConnectionTester { stop_tx, handle }
     }
     fn run_test(
         listener: Option<&mut TcpListener>,
-        target: impl ToSocketAddrs + Send,
+        target: &(impl ToSocketAddrs + Send),
         timeout: Duration,
         payload: &[u8],
     ) -> TestResult {
@@ -114,7 +108,7 @@ impl ConnectionTester {
                     .is_err()
                 {
                     return TestResult::PollFail;
-                };
+                }
 
                 if !events.is_empty() {
                     start = Instant::now();
@@ -126,7 +120,7 @@ impl ConnectionTester {
                     );
                 }
                 // Process each event.
-                for event in events.iter() {
+                for event in &events {
                     // We can use the token we previously provided to `register` to
                     // determine for which socket the event is.
                     match event.token() {
@@ -140,7 +134,7 @@ impl ConnectionTester {
                                 READER,
                                 Interest::READABLE,
                             );
-                            reader = Some(connection)
+                            reader = Some(connection);
                         }
                         WRITER if event.is_writable() => {
                             let wrote = match writer.write(to_be_sent) {
@@ -213,7 +207,7 @@ impl ConnectionTester {
                     .is_err()
                 {
                     return TestResult::PollFail;
-                };
+                }
                 if !events.is_empty() {
                     start = Instant::now();
                 }
@@ -226,7 +220,7 @@ impl ConnectionTester {
                 }
 
                 // Process each event.
-                for event in events.iter() {
+                for event in &events {
                     if event.is_writable() && !to_be_sent.is_empty() {
                         let wrote = match writer.write(to_be_sent) {
                             Err(err)
