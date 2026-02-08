@@ -1,10 +1,10 @@
 [package]
 name = "robotssh"
-authors = ["CordlessCoder <roman@vm.net.ua>"]
 license = "MIT"
 description = "A modern rewrite of autossh"
-version = "0.1.0"
+version = "0.1.2"
 edition = "2024"
+repository = "https://github.com/CordlessCoder/robotssh"
 
 [dependencies]
 clap = { version = "4.5.57", default-features = false, features = [
